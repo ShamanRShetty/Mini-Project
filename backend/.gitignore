@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Environment variables (contains secrets!)
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Uploads (face images - may contain sensitive data)
+uploads/*
+!uploads/.gitkeep
+
+# Build files
+dist/
+build/
+
+# Redis dump
+dump.rdb
+
+# Testing
+coverage/
