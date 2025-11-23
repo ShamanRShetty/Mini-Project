@@ -11,7 +11,7 @@ const Beneficiary = require('../models/Beneficiary');
 const Ledger = require('../models/Ledger');
 const { deduplicateBeneficiary } = require('../utils/dedupe');
 const { saveFaceImage } = require('../utils/saveFaceImage');
-
+const { generateFaceEmbedding } = require('../utils/biometric');
 /**
  * @route   POST /api/beneficiaries
  * @desc    Register new beneficiary with duplicate checking
@@ -121,24 +121,32 @@ exports.register = async (req, res) => {
     const beneficiary = await Beneficiary.create(beneficiaryData);
 
     // ========================================
-    // BIOMETRIC: Save face image
-    // ========================================
-    if (faceImageBase64) {
-      try {
-        const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
+// BIOMETRIC: Save face image + embedding
+// ========================================
+if (faceImageBase64) {
+  try {
+    // Save image to disk
+    const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
 
-        if (filePath) {
-          beneficiary.biometric = {
-            faceImagePath: filePath,
-            capturedAt: new Date(),
-            capturedBy: req.user.id
-          };
-          await beneficiary.save();
-        }
-      } catch (bioError) {
-        console.log('[REGISTER] Biometric save failed (non-critical):', bioError.message);
-      }
+    if (filePath) {
+      // Generate face embedding
+      const embedding = await generateFaceEmbedding(faceImageBase64);
+      
+      beneficiary.biometric = {
+        faceImagePath: filePath,
+        faceEmbedding: embedding,  // ← Store 128-dimensional vector
+        capturedAt: new Date(),
+        capturedBy: req.user.id
+      };
+      
+      await beneficiary.save();
+      
+      console.log('[REGISTER] ✅ Face image and embedding saved');
     }
+  } catch (bioError) {
+    console.log('[REGISTER] ⚠️ Biometric save failed (non-critical):', bioError.message);
+  }
+}
 
     // ========================================
     // Ledger entry

@@ -61,28 +61,33 @@ exports.distribute = async (req, res) => {
     }
 
     // Biometric verification if provided
-    let biometricVerification = null;
-    if (verificationMethod === 'biometric' && biometricData) {
-      const verificationResult = await compareFaces(
-        beneficiary.biometric?.faceImagePath,
-        biometricData
-      );
-      
-      biometricVerification = {
-        verified: verificationResult.match,
-        confidence: verificationResult.confidence,
-        timestamp: new Date()
-      };
+let biometricVerification = null;
+if (verificationMethod === 'biometric' && biometricData) {
+  // Compare using stored embedding or image
+  const verificationResult = await compareFaces(
+    beneficiary.biometric?.faceImagePath,
+    biometricData
+  );
+  
+  biometricVerification = {
+    verified: verificationResult.match,
+    confidence: verificationResult.confidence,
+    distance: verificationResult.distance,
+    timestamp: new Date()
+  };
 
-      // Require minimum confidence threshold
-      if (!verificationResult.match || verificationResult.confidence < 0.7) {
-        return res.status(400).json({
-          success: false,
-          message: 'Biometric verification failed',
-          confidence: verificationResult.confidence
-        });
-      }
-    }
+  // Require minimum confidence threshold
+  if (!verificationResult.match || verificationResult.confidence < 0.4) {
+    return res.status(400).json({
+      success: false,
+      message: 'Biometric verification failed',
+      confidence: verificationResult.confidence,
+      distance: verificationResult.distance
+    });
+  }
+  
+  console.log('[AID] ✅ Biometric verification passed:', verificationResult);
+}
 
     // Update resource inventory
     for (const item of items) {

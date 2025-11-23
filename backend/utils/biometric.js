@@ -1,96 +1,303 @@
 /**
- * Biometric Utilities
+ * Biometric Utilities - FIXED WITH DEBUGGING
  * 
- * Placeholder implementation for biometric (face) verification.
- * In production, you would integrate with:
- * - AWS Rekognition
- * - Azure Face API
- * - Google Cloud Vision
- * - Open source: face-api.js, OpenCV
- * 
- * Current implementation:
- * - Simple placeholder that simulates face matching
- * - Compares image data strings for exact match
- * - Returns mock confidence score
- * 
- * To implement real biometric:
- * 1. Install face recognition library
- * 2. Replace compareFaces with actual comparison
- * 3. Store face embeddings (feature vectors) in database
+ * Uses face-api.js for actual face detection and recognition
  */
 
+const faceapi = require('face-api.js');
+const canvas = require('canvas');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+
+// Patch nodejs environment for face-api.js
+const { Canvas, Image, ImageData } = canvas;
+faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
+
+// Model paths
+const MODEL_PATH = path.join(__dirname, '..', 'models', 'face-api-models');
+
+// Load models once on startup
+let modelsLoaded = false;
+let modelLoadError = null;
+
+/**
+ * Load face recognition models
+ */
+async function loadModels() {
+  if (modelsLoaded) {
+    console.log('[BIOMETRIC] Models already loaded');
+    return true;
+  }
+  
+  console.log('[BIOMETRIC] Loading face recognition models from:', MODEL_PATH);
+  
+  try {
+    // Check if model directory exists
+    if (!fs.existsSync(MODEL_PATH)) {
+      throw new Error(`Model directory not found: ${MODEL_PATH}`);
+    }
+    
+    // List files in model directory for debugging
+    const files = fs.readdirSync(MODEL_PATH);
+    console.log('[BIOMETRIC] Files in model directory:', files);
+    
+    // Check for required model files
+    const requiredFiles = [
+      'tiny_face_detector_model-weights_manifest.json',
+      'face_landmark_68_model-weights_manifest.json',
+      'face_recognition_model-weights_manifest.json'
+    ];
+    
+    for (const file of requiredFiles) {
+      const filePath = path.join(MODEL_PATH, file);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Required model file not found: ${file}`);
+      }
+    }
+    
+    // Load models
+    console.log('[BIOMETRIC] Loading TinyFaceDetector...');
+    await faceapi.nets.tinyFaceDetector.loadFromDisk(MODEL_PATH);
+    
+    console.log('[BIOMETRIC] Loading FaceLandmark68Net...');
+    await faceapi.nets.faceLandmark68Net.loadFromDisk(MODEL_PATH);
+    
+    console.log('[BIOMETRIC] Loading FaceRecognitionNet...');
+    await faceapi.nets.faceRecognitionNet.loadFromDisk(MODEL_PATH);
+    
+    modelsLoaded = true;
+    modelLoadError = null;
+    console.log('[BIOMETRIC] ✅ All models loaded successfully');
+    return true;
+    
+  } catch (error) {
+    modelsLoaded = false;
+    modelLoadError = error;
+    console.error('[BIOMETRIC] ❌ Failed to load models:', error.message);
+    console.error('[BIOMETRIC] Full error:', error);
+    return false;
+  }
+}
+
+/**
+ * Convert base64 image to Image object
+ */
+async function base64ToImage(base64Data) {
+  try {
+    console.log('[BIOMETRIC] Converting base64 to image...');
+    
+    // Remove base64 prefix if present
+    let base64 = base64Data;
+    if (base64.includes('base64,')) {
+      base64 = base64.split('base64,')[1];
+    }
+    
+    const buffer = Buffer.from(base64, 'base64');
+    console.log('[BIOMETRIC] Image buffer size:', buffer.length, 'bytes');
+    
+    // Create image from buffer
+    const img = await canvas.loadImage(buffer);
+    console.log('[BIOMETRIC] Image loaded:', img.width, 'x', img.height);
+    
+    return img;
+  } catch (error) {
+    console.error('[BIOMETRIC] base64ToImage error:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Load image from file path
+ */
+async function loadImageFromPath(imagePath) {
+  try {
+    // Handle both absolute and relative paths
+    let fullPath = imagePath;
+    
+    if (!path.isAbsolute(imagePath)) {
+      fullPath = path.join(__dirname, '..', imagePath);
+    }
+    
+    console.log('[BIOMETRIC] Loading image from:', fullPath);
+    
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`Image file not found: ${fullPath}`);
+    }
+    
+    const img = await canvas.loadImage(fullPath);
+    console.log('[BIOMETRIC] Image loaded:', img.width, 'x', img.height);
+    
+    return img;
+  } catch (error) {
+    console.error('[BIOMETRIC] loadImageFromPath error:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Detect face and extract embedding (descriptor)
+ * Returns 128-dimensional face embedding array
+ */
+async function extractFaceEmbedding(imageData) {
+  console.log('[BIOMETRIC] ===== EXTRACTING FACE EMBEDDING =====');
+  
+  // Check if models are loaded
+  if (!modelsLoaded) {
+    console.log('[BIOMETRIC] Models not loaded, loading now...');
+    const loaded = await loadModels();
+    if (!loaded) {
+      throw new Error(`Models failed to load: ${modelLoadError?.message || 'Unknown error'}`);
+    }
+  }
+  
+  try {
+    let img;
+    
+    console.log('[BIOMETRIC] Image data type:', typeof imageData);
+    
+    // Handle different input types
+    if (typeof imageData === 'string') {
+      if (imageData.startsWith('data:') || imageData.startsWith('/9j/') || imageData.startsWith('iVBOR')) {
+        // Base64 image
+        console.log('[BIOMETRIC] Processing base64 image');
+        img = await base64ToImage(imageData);
+      } else {
+        // File path
+        console.log('[BIOMETRIC] Processing file path');
+        img = await loadImageFromPath(imageData);
+      }
+    } else {
+      throw new Error('Invalid image data format - must be base64 string or file path');
+    }
+    
+    if (!img) {
+      throw new Error('Failed to load image');
+    }
+    
+    console.log('[BIOMETRIC] Detecting face with TinyFaceDetector...');
+    
+    // Detect face with landmarks and descriptor
+    const detection = await faceapi
+      .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({
+        inputSize: 160,
+        scoreThreshold: 0.5
+      }))
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+    
+    if (!detection) {
+      console.error('[BIOMETRIC] ❌ No face detected in image');
+      throw new Error('No face detected in image. Please ensure the face is clearly visible and well-lit.');
+    }
+    
+    console.log('[BIOMETRIC] ✅ Face detected! Box:', detection.detection.box);
+    console.log('[BIOMETRIC] Face detection score:', detection.detection.score);
+    console.log('[BIOMETRIC] Descriptor length:', detection.descriptor.length);
+    
+    // Convert Float32Array to regular array
+    const embedding = Array.from(detection.descriptor);
+    
+    console.log('[BIOMETRIC] ✅ Embedding extracted successfully');
+    console.log('[BIOMETRIC] First 5 values:', embedding.slice(0, 5));
+    
+    return embedding;
+    
+  } catch (error) {
+    console.error('[BIOMETRIC] ❌ Face extraction error:', error.message);
+    console.error('[BIOMETRIC] Error stack:', error.stack);
+    throw error;
+  }
+}
+
+/**
+ * Compare two face embeddings using Euclidean distance
+ */
+function compareEmbeddings(embedding1, embedding2, threshold = 0.6) {
+  console.log('[BIOMETRIC] Comparing embeddings...');
+  
+  if (!embedding1 || !embedding2) {
+    throw new Error('Both embeddings are required');
+  }
+  
+  if (embedding1.length !== 128 || embedding2.length !== 128) {
+    throw new Error(`Invalid embedding dimensions: ${embedding1.length} and ${embedding2.length} (expected 128)`);
+  }
+  
+  // Calculate Euclidean distance
+  let sumSquares = 0;
+  for (let i = 0; i < 128; i++) {
+    const diff = embedding1[i] - embedding2[i];
+    sumSquares += diff * diff;
+  }
+  const distance = Math.sqrt(sumSquares);
+  
+  // Convert distance to confidence (0-1 scale)
+  const confidence = Math.max(0, 1 - (distance / 1.5));
+  
+  // Match if distance is below threshold
+  const match = distance < threshold;
+  
+  console.log('[BIOMETRIC] Distance:', distance);
+  console.log('[BIOMETRIC] Confidence:', confidence);
+  console.log('[BIOMETRIC] Match:', match);
+  
+  return {
+    match,
+    confidence: parseFloat(confidence.toFixed(3)),
+    distance: parseFloat(distance.toFixed(3))
+  };
+}
 
 /**
  * Compare two face images
- * 
- * PLACEHOLDER IMPLEMENTATION
- * In production, replace with actual face recognition
- * 
- * @param {string} storedImagePath - Path to stored face image
- * @param {string} capturedImageData - Base64 encoded captured image
- * @returns {object} { match: boolean, confidence: number }
  */
 exports.compareFaces = async (storedImagePath, capturedImageData) => {
+  console.log('[BIOMETRIC] ===== COMPARING FACES =====');
+  
   try {
-    // If no stored image, cannot verify
     if (!storedImagePath) {
+      console.log('[BIOMETRIC] No stored image path');
       return {
         match: false,
         confidence: 0,
         error: 'No stored biometric data'
       };
     }
-
-    // If no captured image, cannot verify
+    
     if (!capturedImageData) {
+      console.log('[BIOMETRIC] No captured image data');
       return {
         match: false,
         confidence: 0,
         error: 'No captured image provided'
       };
     }
-
-    // ========================================
-    // PLACEHOLDER IMPLEMENTATION
-    // ========================================
     
-    // In real implementation, you would:
-    // 1. Load stored image and extract face embedding
-    // 2. Extract face embedding from captured image
-    // 3. Compare embeddings using cosine similarity or Euclidean distance
-    // 4. Return match if similarity above threshold
-
-    // For demo purposes, generate a pseudo-random confidence
-    // based on hash of the captured image data
-    // This makes the result deterministic for same input
-    const hash = crypto
-      .createHash('md5')
-      .update(capturedImageData.substring(0, 100))
-      .digest('hex');
+    console.log('[BIOMETRIC] Stored image:', storedImagePath);
+    console.log('[BIOMETRIC] Captured image length:', capturedImageData.length);
     
-    // Convert first 2 hex chars to number 0-255, then to 0-1
-    const pseudoConfidence = parseInt(hash.substring(0, 2), 16) / 255;
+    // Extract embeddings from both images
+    console.log('[BIOMETRIC] Extracting stored embedding...');
+    const storedEmbedding = await extractFaceEmbedding(storedImagePath);
     
-    // Bias toward higher confidence for demo (add 0.3, cap at 1.0)
-    const confidence = Math.min(1.0, pseudoConfidence + 0.3);
+    console.log('[BIOMETRIC] Extracting captured embedding...');
+    const capturedEmbedding = await extractFaceEmbedding(capturedImageData);
     
-    // Match if confidence >= 0.7
-    const match = confidence >= 0.7;
-
-    console.log(`[BIOMETRIC] Placeholder comparison - confidence: ${confidence.toFixed(2)}, match: ${match}`);
-
+    // Compare embeddings
+    const result = compareEmbeddings(storedEmbedding, capturedEmbedding);
+    
+    console.log('[BIOMETRIC] ✅ Comparison complete');
+    
     return {
-      match,
-      confidence: parseFloat(confidence.toFixed(2)),
-      method: 'placeholder',
-      note: 'This is a placeholder implementation for development'
+      match: result.match,
+      confidence: result.confidence,
+      distance: result.distance,
+      method: 'face-api.js',
+      threshold: 0.6
     };
-
+    
   } catch (error) {
-    console.error('Biometric comparison error:', error);
+    console.error('[BIOMETRIC] ❌ Comparison error:', error.message);
     return {
       match: false,
       confidence: 0,
@@ -100,38 +307,21 @@ exports.compareFaces = async (storedImagePath, capturedImageData) => {
 };
 
 /**
- * Extract face from image (placeholder)
- * 
- * @param {string} imageData - Base64 encoded image
- * @returns {object} { success: boolean, faceDetected: boolean }
+ * Detect face in image
  */
 exports.detectFace = async (imageData) => {
   try {
-    // Placeholder: Check if image data looks valid
-    if (!imageData || imageData.length < 100) {
-      return {
-        success: false,
-        faceDetected: false,
-        error: 'Invalid image data'
-      };
-    }
-
-    // In real implementation:
-    // 1. Decode base64 image
-    // 2. Use face detection library to find faces
-    // 3. Return face bounding box and landmarks
-
-    // Placeholder: Assume face is always detected for valid images
+    const embedding = await extractFaceEmbedding(imageData);
+    
     return {
       success: true,
       faceDetected: true,
-      confidence: 0.95,
-      faceCount: 1,
-      note: 'Placeholder implementation'
+      embedding: embedding,
+      confidence: 0.95
     };
-
+    
   } catch (error) {
-    console.error('Face detection error:', error);
+    console.error('[BIOMETRIC] Detection error:', error.message);
     return {
       success: false,
       faceDetected: false,
@@ -141,129 +331,62 @@ exports.detectFace = async (imageData) => {
 };
 
 /**
- * Generate face embedding (feature vector) placeholder
- * 
- * @param {string} imageData - Base64 encoded image
- * @returns {number[]} Array of 128 numbers (face embedding)
+ * Generate face embedding from image
+ * THIS IS THE KEY FUNCTION FOR STORING IN DB
  */
 exports.generateFaceEmbedding = async (imageData) => {
+  console.log('[BIOMETRIC] ===== GENERATE FACE EMBEDDING =====');
+  
   try {
-    // In real implementation:
-    // 1. Decode image
-    // 2. Detect face
-    // 3. Extract face embedding using neural network
-
-    // Placeholder: Generate deterministic pseudo-random embedding
-    // based on image data hash
-    const hash = crypto
-      .createHash('sha256')
-      .update(imageData.substring(0, 500))
-      .digest('hex');
-    
-    // Convert hash to 128 numbers
-    const embedding = [];
-    for (let i = 0; i < 128; i++) {
-      const hexPair = hash.substring((i * 2) % 64, ((i * 2) % 64) + 2);
-      embedding.push(parseInt(hexPair, 16) / 255);
+    if (!imageData) {
+      console.error('[BIOMETRIC] No image data provided');
+      return null;
     }
-
+    
+    const embedding = await extractFaceEmbedding(imageData);
+    
+    if (!embedding || embedding.length !== 128) {
+      console.error('[BIOMETRIC] Invalid embedding generated');
+      return null;
+    }
+    
+    console.log('[BIOMETRIC] ✅ Generated embedding with', embedding.length, 'dimensions');
     return embedding;
-
+    
   } catch (error) {
-    console.error('Generate embedding error:', error);
+    console.error('[BIOMETRIC] ❌ Generate embedding error:', error.message);
+    console.error('[BIOMETRIC] Full error:', error);
     return null;
   }
 };
 
 /**
- * Compare two face embeddings using cosine similarity
- * 
- * @param {number[]} embedding1 - First embedding
- * @param {number[]} embedding2 - Second embedding
- * @returns {number} Similarity score 0-1
+ * Compare embeddings (direct comparison)
  */
-exports.compareEmbeddings = (embedding1, embedding2) => {
-  if (!embedding1 || !embedding2 || embedding1.length !== embedding2.length) {
-    return 0;
-  }
+exports.compareEmbeddings = compareEmbeddings;
 
-  // Cosine similarity
-  let dotProduct = 0;
-  let norm1 = 0;
-  let norm2 = 0;
+/**
+ * Load models (can be called manually)
+ */
+exports.loadModels = loadModels;
 
-  for (let i = 0; i < embedding1.length; i++) {
-    dotProduct += embedding1[i] * embedding2[i];
-    norm1 += embedding1[i] * embedding1[i];
-    norm2 += embedding2[i] * embedding2[i];
-  }
-
-  const similarity = dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
-  
-  return Math.max(0, Math.min(1, similarity)); // Clamp to 0-1
+/**
+ * Check if models are loaded
+ */
+exports.areModelsLoaded = () => {
+  return modelsLoaded;
 };
 
 /**
- * Save face image to disk
- * 
- * @param {string} imageData - Base64 encoded image
- * @param {string} beneficiaryId - Beneficiary ID for filename
- * @returns {string} Path to saved file
+ * Get model load error (if any)
  */
-exports.saveFaceImage = async (imageData, beneficiaryId) => {
-  try {
-    // Remove base64 prefix if present
-    const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
-    
-    // Create buffer from base64
-    const buffer = Buffer.from(base64Data, 'base64');
-    
-    // Generate filename
-    const timestamp = Date.now();
-    const filename = `face_${beneficiaryId}_${timestamp}.jpg`;
-    const uploadPath = path.join(__dirname, '..', 'uploads', filename);
-    
-    // Ensure uploads directory exists
-    const uploadsDir = path.dirname(uploadPath);
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-    
-    // Write file
-    fs.writeFileSync(uploadPath, buffer);
-    
-    console.log(`[BIOMETRIC] Saved face image: ${filename}`);
-    
-    return filename;
-
-  } catch (error) {
-    console.error('Save face image error:', error);
-    throw error;
-  }
+exports.getModelLoadError = () => {
+  return modelLoadError;
 };
 
-/**
- * Load face image from disk
- * 
- * @param {string} filename - Filename of stored image
- * @returns {string} Base64 encoded image data
- */
-exports.loadFaceImage = async (filename) => {
-  try {
-    const filepath = path.join(__dirname, '..', 'uploads', filename);
-    
-    if (!fs.existsSync(filepath)) {
-      throw new Error('Face image not found');
-    }
-    
-    const buffer = fs.readFileSync(filepath);
-    return buffer.toString('base64');
+// Try to load models on module initialization
+loadModels().catch(err => {
+  console.error('[BIOMETRIC] Failed to load models on initialization:', err.message);
+});
 
-  } catch (error) {
-    console.error('Load face image error:', error);
-    throw error;
-  }
-};
-
-// Export all functions
 module.exports = exports;

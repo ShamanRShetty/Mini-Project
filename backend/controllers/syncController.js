@@ -12,7 +12,7 @@ const AidLog = require('../models/AidLog');
 const Loss = require('../models/Loss');
 const Ledger = require('../models/Ledger');
 const { saveFaceImage } = require('../utils/saveFaceImage');
-
+const { generateFaceEmbedding } = require('../utils/biometric');
 /**
  * @route   POST /api/sync/upload
  * @desc    Upload and process offline data immediately with duplicate checking
@@ -255,26 +255,31 @@ async function createBeneficiary(data, offlineId, userId) {
 
   console.log("Beneficiary created:", beneficiary._id, beneficiary.name);
 
-  // -----------------------------------
-  // BIOMETRIC SAVE
-  // -----------------------------------
-  if (faceImageBase64) {
-    try {
-      const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
+ // -----------------------------------
+// BIOMETRIC SAVE + EMBEDDING
+// -----------------------------------
+if (faceImageBase64) {
+  try {
+    const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
 
-      if (filePath) {
-        beneficiary.biometric = {
-          faceImagePath: filePath,
-          capturedAt: new Date(),
-          capturedBy: userId
-        };
+    if (filePath) {
+      // Generate embedding
+      const embedding = await generateFaceEmbedding(faceImageBase64);
+      
+      beneficiary.biometric = {
+        faceImagePath: filePath,
+        faceEmbedding: embedding,  // ← Store embedding
+        capturedAt: new Date(),
+        capturedBy: userId
+      };
 
-        await beneficiary.save();
-      }
-    } catch (bioError) {
-      console.log('Biometric save failed (non-critical):', bioError.message);
+      await beneficiary.save();
+      console.log('[SYNC] ✅ Face and embedding saved');
     }
+  } catch (bioError) {
+    console.log('[SYNC] ⚠️ Biometric save failed:', bioError.message);
   }
+}
 
   // Ledger Block
   try {
