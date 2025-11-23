@@ -17,6 +17,9 @@
   "author": "HackNet AI",
   "license": "MIT",
   "dependencies": {
+    "@tensorflow-models/face-detection": "^1.0.3",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0",
     "axios": "^1.13.2",
     "bcryptjs": "^2.4.3",
     "bull": "^4.12.0",

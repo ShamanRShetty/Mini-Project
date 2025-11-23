@@ -24,7 +24,8 @@ import AidDistribution from './pages/AidDistribution';
 import Logistics from './pages/Logistics';
 import DonorPortal from './pages/DonorPortal';
 import LedgerExplorer from './pages/LedgerExplorer';
-
+import PriorityDashboard from './pages/PriorityDashboard';
+import LiveTracking from './pages/LiveTracking';
 // Components
 import Navbar from './components/Navbar';
 import OfflineBanner from './components/OfflineBanner';
@@ -146,6 +147,10 @@ function App() {
 
             <Route path="/register" element={<Register />} />
 
+            {/* PUBLIC TRACKING — ANYONE CAN ACCESS WITHOUT LOGIN */}
+<Route path="/track" element={<LiveTracking/>} />
+<Route path="/track/:trackingId" element={<LiveTracking />} />
+
             {/* ========= PROTECTED PAGES ========= */}
 
             <Route
@@ -156,6 +161,16 @@ function App() {
                 </ProtectedRoute>
               }
             />
+          
+          
+            <Route
+            path="/priority-dashboard"
+            element={
+              <ProtectedRoute>
+                <PriorityDashboard />
+              </ProtectedRoute>
+            }
+          />
 
             <Route
               path="/field-worker"

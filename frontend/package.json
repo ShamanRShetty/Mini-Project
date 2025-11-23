@@ -10,7 +10,10 @@
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@turf/turf": "^7.3.0",
     "axios": "^1.6.2",
+    "date-fns": "^4.1.0",
+    "fuzzball": "^2.2.3",
     "idb": "^8.0.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.460.0",
@@ -19,7 +22,8 @@
     "react-dom": "^18.2.0",
     "react-leaflet": "^4.2.1",
     "react-router-dom": "^6.30.2",
-    "recharts": "^2.10.3"
+    "recharts": "^2.10.3",
+    "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",

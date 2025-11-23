@@ -177,3 +177,10 @@
     display: none !important;
   }
 }
+
+/* Enable hover on parent */
+.group:hover > .absolute {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}

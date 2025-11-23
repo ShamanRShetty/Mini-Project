@@ -44,6 +44,9 @@ const syncRoutes = require('./routes/sync');
 const logisticsRoutes = require('./routes/logistics');
 const ledgerRoutes = require('./routes/ledger');
 const donorRoutes = require('./routes/donor');
+const priorityRoutes = require('./routes/priority');
+const trackingRoutes = require('./routes/tracking');
+
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -53,6 +56,8 @@ app.use('/api/sync', syncRoutes);
 app.use('/api/logistics', logisticsRoutes);
 app.use('/api/ledger', ledgerRoutes);
 app.use('/api/donor', donorRoutes);
+app.use('/api/priority', priorityRoutes);
+app.use('/api/tracking', trackingRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

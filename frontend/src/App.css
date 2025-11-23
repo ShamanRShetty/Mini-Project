@@ -40,3 +40,10 @@
 .read-the-docs {
   color: #888;
 }
+
+/* Enable hover on parent */
+.group:hover > .absolute {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
