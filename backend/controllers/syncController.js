@@ -1,17 +1,21 @@
 /**
- * Sync Controller (FINAL FIXED VERSION)
+ * Sync Controller (FIXED VERSION)
  * 
- * Directly processes records and creates them in database
+ * Fixes:
+ * 1. Proper duplicate checking using nationalId
+ * 2. Handles both online and offline sync properly
+ * 3. Better error handling and validation
  */
 
 const Beneficiary = require('../models/Beneficiary');
 const AidLog = require('../models/AidLog');
 const Loss = require('../models/Loss');
 const Ledger = require('../models/Ledger');
+const { saveFaceImage } = require('../utils/saveFaceImage');
 
 /**
  * @route   POST /api/sync/upload
- * @desc    Upload and process offline data immediately
+ * @desc    Upload and process offline data immediately with duplicate checking
  * @access  Private
  */
 exports.upload = async (req, res) => {
@@ -53,7 +57,7 @@ exports.upload = async (req, res) => {
           continue;
         }
 
-        // Check for duplicates
+        // Check for duplicates by offlineId first
         let existingRecord = null;
         
         if (record.recordType === 'beneficiary') {
@@ -125,20 +129,46 @@ exports.upload = async (req, res) => {
   }
 };
 
-const { saveFaceImage } = require('../utils/saveFaceImage');
-
 /**
- * Create a beneficiary in the database
+ * Create a beneficiary in the database with duplicate checking
  */
 async function createBeneficiary(data, offlineId, userId) {
+  console.log('Creating beneficiary with data:', JSON.stringify(data, null, 2));
+
+  // ============================================
+  // DUPLICATE CHECK - Check nationalId first
+  // ============================================
+  if (data.nationalId) {
+    const existingByNationalId = await Beneficiary.findOne({ 
+      nationalId: data.nationalId,
+      status: { $ne: 'duplicate' }
+    });
+    
+    if (existingByNationalId) {
+      console.log('DUPLICATE FOUND: nationalId already exists:', data.nationalId);
+      throw new Error(`Duplicate beneficiary: National ID ${data.nationalId} already registered`);
+    }
+  }
+
+  // Check by name and phone combination
+  if (data.name && data.phone) {
+    const existingByNamePhone = await Beneficiary.findOne({
+      name: new RegExp(`^${data.name}$`, 'i'), // Case insensitive exact match
+      phone: data.phone,
+      status: { $ne: 'duplicate' }
+    });
+
+    if (existingByNamePhone) {
+      console.log('DUPLICATE FOUND: Name and phone already exist');
+      throw new Error(`Duplicate beneficiary: ${data.name} with phone ${data.phone} already registered`);
+    }
+  }
 
   // Accept BOTH online & offline formats
   const faceImageBase64 =
     data.biometric?.faceImageData ||
     data.faceImage ||
     null;
-
-  console.log('Creating beneficiary with data:', JSON.stringify(data, null, 2));
 
   // Base Data
   const beneficiaryData = {
@@ -164,22 +194,32 @@ async function createBeneficiary(data, offlineId, userId) {
     ];
 
     beneficiaryData.needs = data.needs.map(n => {
-      const clean = n.toLowerCase().trim();
-
-      if (allowed.includes(clean)) {
-        return { type: clean, priority: "medium" };
-      }
-
-      if (clean.includes("sanitation")) {
-        return { type: "hygiene", priority: "medium" };
-      }
-
-      if (clean.includes("baby")) {
+      // Handle both string format and object format
+      if (typeof n === 'string') {
+        const clean = n.toLowerCase().trim();
+        
+        if (allowed.includes(clean)) {
+          return { type: clean, priority: "medium" };
+        }
+        
+        if (clean.includes("sanitation")) {
+          return { type: "hygiene", priority: "medium" };
+        }
+        
+        if (clean.includes("baby")) {
+          return { type: "other", description: n, priority: "medium" };
+        }
+        
         return { type: "other", description: n, priority: "medium" };
+      } else if (n.type) {
+        // Already in correct format
+        return {
+          type: allowed.includes(n.type) ? n.type : 'other',
+          priority: n.priority || 'medium',
+          description: n.description
+        };
       }
-
-      return { type: "other", description: n, priority: "medium" };
-    });
+    }).filter(Boolean); // Remove any null/undefined entries
   }
 
   // Address
@@ -187,9 +227,9 @@ async function createBeneficiary(data, offlineId, userId) {
     beneficiaryData.address = data.address;
   } else if (data.village || data.district || data.region) {
     beneficiaryData.address = {
-      village: data.village,
-      district: data.district,
-      region: data.region
+      village: data.village || data.location?.village,
+      district: data.district || data.location?.district,
+      region: data.region || data.location?.region
     };
   }
 
@@ -198,6 +238,14 @@ async function createBeneficiary(data, offlineId, userId) {
     beneficiaryData.location = {
       type: "Point",
       coordinates: [parseFloat(data.longitude), parseFloat(data.latitude)]
+    };
+  } else if (data.location?.coordinates?.lng && data.location?.coordinates?.lat) {
+    beneficiaryData.location = {
+      type: "Point",
+      coordinates: [
+        parseFloat(data.location.coordinates.lng), 
+        parseFloat(data.location.coordinates.lat)
+      ]
     };
   }
 
@@ -208,19 +256,23 @@ async function createBeneficiary(data, offlineId, userId) {
   console.log("Beneficiary created:", beneficiary._id, beneficiary.name);
 
   // -----------------------------------
-  // BIOMETRIC SAVE — FIXED
+  // BIOMETRIC SAVE
   // -----------------------------------
   if (faceImageBase64) {
-    const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
+    try {
+      const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
 
-    if (filePath) {
-      beneficiary.biometric = {
-        faceImagePath: filePath,
-        capturedAt: new Date(),
-        capturedBy: userId
-      };
+      if (filePath) {
+        beneficiary.biometric = {
+          faceImagePath: filePath,
+          capturedAt: new Date(),
+          capturedBy: userId
+        };
 
-      await beneficiary.save();
+        await beneficiary.save();
+      }
+    } catch (bioError) {
+      console.log('Biometric save failed (non-critical):', bioError.message);
     }
   }
 
@@ -244,9 +296,6 @@ async function createBeneficiary(data, offlineId, userId) {
 
   return beneficiary;
 }
-
-
-
 
 /**
  * Create an aid log in the database

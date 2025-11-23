@@ -1,16 +1,10 @@
 /**
- * Beneficiary Controller
+ * Beneficiary Controller (FIXED VERSION)
  * 
- * Handles beneficiary registration, search, updates, and verification.
- * 
- * Functions:
- * - register: Create new beneficiary
- * - getAll: Get all beneficiaries with filters
- * - getById: Get single beneficiary details
- * - update: Update beneficiary information
- * - verify: Verify beneficiary identity
- * - getStats: Get beneficiary statistics
- * - searchNearby: Find beneficiaries near a location
+ * Fixes:
+ * 1. Proper duplicate checking on nationalId
+ * 2. Better error messages for duplicates
+ * 3. More thorough validation
  */
 
 const Beneficiary = require('../models/Beneficiary');
@@ -20,27 +14,75 @@ const { saveFaceImage } = require('../utils/saveFaceImage');
 
 /**
  * @route   POST /api/beneficiaries
- * @desc    Register new beneficiary
+ * @desc    Register new beneficiary with duplicate checking
  * @access  Private (Field Worker, NGO, Admin)
  */
 exports.register = async (req, res) => {
   try {
-    // ----------------------------------------
-    // Build base beneficiary data
-    // ----------------------------------------
+    console.log('[REGISTER] Received request:', JSON.stringify(req.body, null, 2));
+
+    // ========================================
+    // DUPLICATE CHECK - BEFORE ANYTHING ELSE
+    // ========================================
+    
+    // Check 1: National ID duplicate
+    if (req.body.nationalId) {
+      const existingByNationalId = await Beneficiary.findOne({
+        nationalId: req.body.nationalId,
+        status: { $ne: 'duplicate' }
+      });
+
+      if (existingByNationalId) {
+        console.log('[REGISTER] DUPLICATE: National ID already exists');
+        return res.status(409).json({
+          success: false,
+          message: `Duplicate beneficiary found: National ID ${req.body.nationalId} is already registered`,
+          duplicateId: existingByNationalId._id,
+          duplicate: {
+            id: existingByNationalId._id,
+            name: existingByNationalId.name,
+            nationalId: existingByNationalId.nationalId,
+            registrationDate: existingByNationalId.registrationDate
+          }
+        });
+      }
+    }
+
+    // Check 2: Name + Phone combination
+    if (req.body.name && req.body.phone) {
+      const existingByNamePhone = await Beneficiary.findOne({
+        name: new RegExp(`^${req.body.name}$`, 'i'),
+        phone: req.body.phone,
+        status: { $ne: 'duplicate' }
+      });
+
+      if (existingByNamePhone) {
+        console.log('[REGISTER] DUPLICATE: Name and phone combination already exists');
+        return res.status(409).json({
+          success: false,
+          message: `Duplicate beneficiary found: ${req.body.name} with phone ${req.body.phone} is already registered`,
+          duplicateId: existingByNamePhone._id,
+          duplicate: {
+            id: existingByNamePhone._id,
+            name: existingByNamePhone.name,
+            phone: existingByNamePhone.phone,
+            registrationDate: existingByNamePhone.registrationDate
+          }
+        });
+      }
+    }
+
+    // Check 3: Advanced deduplication (name similarity + location)
     const beneficiaryData = {
       ...req.body,
       registeredBy: req.user.id,
       registrationDate: new Date()
     };
 
-    // Remove biometric from body so we can process file later
     const faceImageBase64 = req.body.biometric?.faceImageData;
     delete beneficiaryData.biometric;
 
-    // ----------------------------------------
     // Handle GPS coordinates
-    // ----------------------------------------
     if (req.body.latitude && req.body.longitude) {
       beneficiaryData.location = {
         type: 'Point',
@@ -51,59 +93,77 @@ exports.register = async (req, res) => {
       };
     }
 
-    // ----------------------------------------
-    // Duplicate check (name, nationalId, etc.)
-    // ----------------------------------------
     const possibleDuplicate = await deduplicateBeneficiary(beneficiaryData);
 
     if (possibleDuplicate) {
+      console.log('[REGISTER] DUPLICATE: Similar beneficiary found by dedupe logic');
       return res.status(409).json({
         success: false,
-        message: 'Possible duplicate beneficiary found',
+        message: 'Possible duplicate beneficiary found. This person may already be registered.',
         duplicateId: possibleDuplicate._id,
-        duplicate: possibleDuplicate
+        duplicate: {
+          id: possibleDuplicate._id,
+          name: possibleDuplicate.name,
+          nationalId: possibleDuplicate.nationalId,
+          phone: possibleDuplicate.phone,
+          address: possibleDuplicate.address,
+          registrationDate: possibleDuplicate.registrationDate
+        }
       });
     }
 
-    // ----------------------------------------
-    // Create beneficiary FIRST (we need the ID to save image)
-    // ----------------------------------------
+    // ========================================
+    // NO DUPLICATE - PROCEED WITH CREATION
+    // ========================================
+    
+    console.log('[REGISTER] No duplicate found, creating new beneficiary');
+
     const beneficiary = await Beneficiary.create(beneficiaryData);
 
-    // ----------------------------------------
-    // BIOMETRIC: Save face image to /uploads/faces
-    // ----------------------------------------
+    // ========================================
+    // BIOMETRIC: Save face image
+    // ========================================
     if (faceImageBase64) {
-      const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
+      try {
+        const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
 
-      if (filePath) {
-        beneficiary.biometric = {
-          faceImagePath: filePath,
-          capturedAt: new Date(),
-          capturedBy: req.user.id
-        };
-        await beneficiary.save();
+        if (filePath) {
+          beneficiary.biometric = {
+            faceImagePath: filePath,
+            capturedAt: new Date(),
+            capturedBy: req.user.id
+          };
+          await beneficiary.save();
+        }
+      } catch (bioError) {
+        console.log('[REGISTER] Biometric save failed (non-critical):', bioError.message);
       }
     }
 
-    // ----------------------------------------
+    // ========================================
     // Ledger entry
-    // ----------------------------------------
-    await Ledger.addBlock(
-      'beneficiary_registration',
-      {
-        beneficiaryId: beneficiary._id,
-        name: beneficiary.name,
-        registeredBy: req.user.id,
-        timestamp: new Date()
-      },
-      req.user.id,
-      `Beneficiary registered: ${beneficiary.name}`
-    );
+    // ========================================
+    try {
+      await Ledger.addBlock(
+        'beneficiary_registration',
+        {
+          beneficiaryId: beneficiary._id,
+          name: beneficiary.name,
+          registeredBy: req.user.id,
+          timestamp: new Date()
+        },
+        req.user.id,
+        `Beneficiary registered: ${beneficiary.name}`
+      );
+    } catch (ledgerError) {
+      console.log('[REGISTER] Ledger error (non-critical):', ledgerError.message);
+    }
 
-    // ----------------------------------------
+    // ========================================
     // Send response
-    // ----------------------------------------
+    // ========================================
+    console.log('[REGISTER] SUCCESS: Beneficiary created with ID:', beneficiary._id);
+    
     res.status(201).json({
       success: true,
       message: 'Beneficiary registered successfully',
@@ -111,7 +171,7 @@ exports.register = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Register beneficiary error:', error);
+    console.error('[REGISTER] Error:', error);
     res.status(500).json({
       success: false,
       message: 'Error registering beneficiary',
@@ -119,7 +179,6 @@ exports.register = async (req, res) => {
     });
   }
 };
-
 
 /**
  * @route   GET /api/beneficiaries
@@ -453,7 +512,7 @@ exports.getStats = async (req, res) => {
 exports.searchNearby = async (req, res) => {
   try {
     const { lat, lng } = req.params;
-    const { maxDistance = 5000, limit = 50 } = req.query; // maxDistance in meters
+    const { maxDistance = 5000, limit = 50 } = req.query;
 
     const beneficiaries = await Beneficiary.find({
       location: {
@@ -503,7 +562,7 @@ exports.getEligibleForAid = async (req, res) => {
           $expr: {
             $gte: [
               { $subtract: [new Date(), '$lastAidDate'] },
-              7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
+              7 * 24 * 60 * 60 * 1000
             ]
           }
         }
