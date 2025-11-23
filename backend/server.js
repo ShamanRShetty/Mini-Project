@@ -11,11 +11,11 @@ const connectDB = require('./config/db');
 
 // Initialize Express
 const app = express();
-
+const path = require('path');
 // ========================================
 // MIDDLEWARE
 // ========================================
-
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // CORS - Allow frontend to connect
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',

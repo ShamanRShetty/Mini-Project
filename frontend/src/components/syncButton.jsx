@@ -28,6 +28,7 @@ const SyncButton = ({ onSyncComplete }) => {
   // Load pending count on mount and periodically
   useEffect(() => {
     loadPendingCount();
+    setPendingCount(0);
     const interval = setInterval(loadPendingCount, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -114,13 +115,8 @@ const SyncButton = ({ onSyncComplete }) => {
         const originalRecord = pendingRecords.find(r => r.offlineId === item.offlineId);
         if (originalRecord) {
           try {
-            if (originalRecord.recordType === 'beneficiary') {
-              await deleteBeneficiaryFromQueue(item.offlineId);
-            } else if (originalRecord.recordType === 'aid_log') {
-              await deleteAidFromQueue(item.offlineId);
-            } else if (originalRecord.recordType === 'loss') {
-              await deleteLossFromQueue(item.offlineId);
-            }
+            await deleteFromOfflineQueue(item.offlineId);
+
             console.log('[SyncButton] Deleted from IndexedDB:', item.offlineId);
           } catch (deleteErr) {
             console.error('[SyncButton] Error deleting:', deleteErr);
@@ -130,12 +126,17 @@ const SyncButton = ({ onSyncComplete }) => {
       
       // Reload pending count
       await loadPendingCount();
+      setPendingCount(0);
+
       
       // Set result message
       const successCount = successItems.length;
       const dupCount = duplicateItems.length;
       const failCount = failedItems.length;
-      
+      if (failCount === 0) {
+  setPendingCount(0);
+}
+
       if (failCount > 0) {
         setSyncMessage(`Synced ${successCount}, ${failCount} failed`);
         setLastSyncResult('error');

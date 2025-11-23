@@ -35,6 +35,14 @@ const Login = () => {
       if (response.data.success) {
         // Store auth and redirect
         login(response.data.user, response.data.token);
+        localStorage.setItem(
+  "auth",
+  JSON.stringify({
+    user: response.data.user,
+    token: response.data.token
+  })
+);
+
         navigate('/dashboard');
       } else {
         setError(response.data.message || 'Login failed');
@@ -61,9 +69,19 @@ const Login = () => {
     try {
       const response = await authAPI.login(testEmail, testPassword);
       if (response.data.success) {
-        login(response.data.user, response.data.token);
-        navigate('/dashboard');
-      }
+  login(response.data.user, response.data.token);
+
+  localStorage.setItem(
+    "auth",
+    JSON.stringify({
+      user: response.data.user,
+      token: response.data.token
+    })
+  );
+
+  navigate('/dashboard');
+}
+
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed');
     } finally {

@@ -16,6 +16,7 @@
 const Beneficiary = require('../models/Beneficiary');
 const Ledger = require('../models/Ledger');
 const { deduplicateBeneficiary } = require('../utils/dedupe');
+const { saveFaceImage } = require('../utils/saveFaceImage');
 
 /**
  * @route   POST /api/beneficiaries
@@ -24,23 +25,37 @@ const { deduplicateBeneficiary } = require('../utils/dedupe');
  */
 exports.register = async (req, res) => {
   try {
+    // ----------------------------------------
+    // Build base beneficiary data
+    // ----------------------------------------
     const beneficiaryData = {
       ...req.body,
-      registeredBy: req.user.id, // From auth middleware
+      registeredBy: req.user.id,
       registrationDate: new Date()
     };
 
-    // Handle location coordinates if provided
+    // Remove biometric from body so we can process file later
+    const faceImageBase64 = req.body.biometric?.faceImageData;
+    delete beneficiaryData.biometric;
+
+    // ----------------------------------------
+    // Handle GPS coordinates
+    // ----------------------------------------
     if (req.body.latitude && req.body.longitude) {
       beneficiaryData.location = {
         type: 'Point',
-        coordinates: [parseFloat(req.body.longitude), parseFloat(req.body.latitude)]
+        coordinates: [
+          parseFloat(req.body.longitude),
+          parseFloat(req.body.latitude)
+        ]
       };
     }
 
-    // Check for duplicates (by name, nationalId, or biometric)
+    // ----------------------------------------
+    // Duplicate check (name, nationalId, etc.)
+    // ----------------------------------------
     const possibleDuplicate = await deduplicateBeneficiary(beneficiaryData);
-    
+
     if (possibleDuplicate) {
       return res.status(409).json({
         success: false,
@@ -50,10 +65,30 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Create beneficiary
+    // ----------------------------------------
+    // Create beneficiary FIRST (we need the ID to save image)
+    // ----------------------------------------
     const beneficiary = await Beneficiary.create(beneficiaryData);
 
-    // Add to blockchain ledger
+    // ----------------------------------------
+    // BIOMETRIC: Save face image to /uploads/faces
+    // ----------------------------------------
+    if (faceImageBase64) {
+      const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
+
+      if (filePath) {
+        beneficiary.biometric = {
+          faceImagePath: filePath,
+          capturedAt: new Date(),
+          capturedBy: req.user.id
+        };
+        await beneficiary.save();
+      }
+    }
+
+    // ----------------------------------------
+    // Ledger entry
+    // ----------------------------------------
     await Ledger.addBlock(
       'beneficiary_registration',
       {
@@ -66,6 +101,9 @@ exports.register = async (req, res) => {
       `Beneficiary registered: ${beneficiary.name}`
     );
 
+    // ----------------------------------------
+    // Send response
+    // ----------------------------------------
     res.status(201).json({
       success: true,
       message: 'Beneficiary registered successfully',
@@ -81,6 +119,7 @@ exports.register = async (req, res) => {
     });
   }
 };
+
 
 /**
  * @route   GET /api/beneficiaries

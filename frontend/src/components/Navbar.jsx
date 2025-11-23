@@ -31,7 +31,7 @@ const Navbar = () => {
     // Field worker links
     if (['field_worker', 'ngo', 'admin'].includes(user?.role)) {
       links.push(
-        { to: '/field-worker', label: 'Register', icon: Users, roles: ['field_worker', 'ngo', 'admin'] },
+        { to: 'register', label: 'Register', icon: Users, roles: ['field_worker', 'ngo', 'admin'] },
         { to: '/aid-distribution', label: 'Aid Distribution', icon: Package, roles: ['field_worker', 'ngo', 'admin'] }
       );
     }
@@ -62,7 +62,7 @@ const Navbar = () => {
   
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate('/home');
   };
   
   const isActiveLink = (path) => location.pathname === path;

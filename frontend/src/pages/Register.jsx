@@ -13,13 +13,15 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { saveToOfflineQueue, getOfflineQueue } from '../utils/indexedDB';
+import { useAuth } from '../App';  
 
 const Register = () => {
   // Form data state
+  const { token } = useAuth();
   const [formData, setFormData] = useState({
     name: '',
     age: '',
-    gender: '',
+    gender: 'prefer_not_to_say',
     phone: '',
     idType: 'aadhaar',
     idNumber: '',
@@ -40,7 +42,6 @@ const Register = () => {
   const [cameraError, setCameraError] = useState('');
   const [capturedImage, setCapturedImage] = useState(null);
   const [cameraStream, setCameraStream] = useState(null);
-  
   // GPS states
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState('');
@@ -106,6 +107,7 @@ const Register = () => {
       
       // Store stream reference for cleanup
       setCameraStream(stream);
+      
       
       // IMPORTANT: Wait for video element to be ready
       if (videoRef.current) {
@@ -372,15 +374,52 @@ const Register = () => {
 
     try {
       if (isOnline) {
+        const needsMap = {
+  "Food": "food",
+  "Water": "water",
+  "Shelter": "shelter",
+  "Medical": "medicine",
+  "Clothing": "clothing",
+  "Sanitation": "hygiene",
+  "Baby Supplies": "hygiene", 
+  "Elderly Care": "hygiene"
+};
+        const payload = {
+      name: formData.name,
+      age: parseInt(formData.age) || null,
+      gender: formData.gender,
+      phone: formData.phone,
+      nationalId: formData.idNumber,
+      familySize: parseInt(formData.familySize) || 1,
+
+      address: {
+        village: formData.location.village,
+        district: formData.location.district,
+        region: formData.location.region
+      },
+
+      latitude: formData.location.coordinates.lat,
+      longitude: formData.location.coordinates.lng,
+
+      biometric: formData.faceImage 
+        ? { faceImageData: formData.faceImage }
+        : undefined,
+
+      
+
+needs: formData.needs.map(n => ({ type: needsMap[n] }))
+
+    };
+
         // Submit to server
-        const token = localStorage.getItem('token');
-        const response = await fetch('http://localhost:5000/api/beneficiaries/register', {
+        const response = await fetch('http://localhost:5000/api/beneficiaries', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify(formData)
+          body: JSON.stringify(payload)
+
         });
 
         if (response.ok) {
@@ -421,7 +460,7 @@ const Register = () => {
     setFormData({
       name: '',
       age: '',
-      gender: '',
+      gender: 'prefer_not_to_say',
       phone: '',
       idType: 'aadhaar',
       idNumber: '',
@@ -439,6 +478,63 @@ const Register = () => {
     setCapturedImage(null);
     stopCamera();
   };
+  const syncOfflineData = async () => {
+  try {
+    const queue = await getOfflineQueue();
+
+    if (queue.length === 0) {
+      setSubmitMessage({ type: "success", text: "No offline records to sync." });
+      return;
+    }
+
+    setSubmitMessage({ type: "info", text: "Syncing offline data..." });
+
+    const response = await fetch("http://localhost:5000/api/sync/upload", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        records: queue,
+        deviceId: "browser-client",
+        deviceInfo: navigator.userAgent
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || "Sync failed");
+    }
+
+    // Clear synced items from IndexedDB
+    const request = indexedDB.open("ResilienceHubDB", 3);
+
+request.onsuccess = () => {
+  const db = request.result;
+  const tx = db.transaction("offlineQueue", "readwrite");
+  const store = tx.objectStore("offlineQueue");
+  store.clear();
+};
+
+
+
+
+    setSubmitMessage({
+      type: "success",
+      text: `Sync complete! ${data.results.success.length} records uploaded.`
+    });
+
+    // Re-count offline queue
+    getOfflineQueue().then(q => setOfflineCount(q.length));
+
+  } catch (err) {
+    console.error("Sync error:", err);
+    setSubmitMessage({ type: "error", text: err.message });
+  }
+};
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8 px-4">
@@ -453,14 +549,38 @@ const Register = () => {
           </p>
           
           {/* Online/Offline Status */}
-          <div className={`inline-flex items-center mt-4 px-4 py-2 rounded-full text-sm font-medium ${
-            isOnline ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
-          }`}>
-            <span className={`w-2 h-2 rounded-full mr-2 ${
-              isOnline ? 'bg-green-500' : 'bg-yellow-500'
-            }`}></span>
-            {isOnline ? 'Online' : `Offline (${offlineCount} pending)`}
-          </div>
+<div className="flex items-center justify-center gap-4 mt-4">
+
+  {/* Online/Offline Badge */}
+  <div
+    className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${
+      isOnline ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+    }`}
+  >
+    <span
+      className={`w-2 h-2 rounded-full mr-2 ${
+        isOnline ? 'bg-green-500' : 'bg-yellow-500'
+      }`}
+    ></span>
+    {isOnline ? 'Online' : `Offline (${offlineCount} pending)`}
+  </div>
+
+  {/* Sync Now Button */}
+  {offlineCount > 0 && (
+    <button
+      type="button"
+      onClick={syncOfflineData}
+      className="px-5 py-2 bg-green-600 text-white rounded-full shadow hover:bg-green-700 transition flex items-center gap-2"
+    >
+      <span>🔄</span>
+      <span>Sync Now ({offlineCount} pending)</span>
+    </button>
+  )}
+
+</div>
+
+
+
         </div>
 
         {/* Form */}
@@ -492,7 +612,7 @@ const Register = () => {
               )}
 
               {/* Video Preview - FIXED: Always render video element */}
-              <div className={`relative mb-4 ${!cameraActive && !capturedImage ? 'hidden' : ''}`}>
+              <div className="relative mb-4">
                 {/* Live Video Feed */}
                 <video
                   ref={videoRef}
@@ -748,10 +868,10 @@ const Register = () => {
                   onChange={handleInputChange}
                   className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="">Select Gender</option>
                   <option value="male">Male</option>
                   <option value="female">Female</option>
                   <option value="other">Other</option>
+                    <option value="prefer_not_to_say">Prefer not to say</option>
                 </select>
               </div>
               

@@ -125,13 +125,22 @@ exports.upload = async (req, res) => {
   }
 };
 
+const { saveFaceImage } = require('../utils/saveFaceImage');
+
 /**
  * Create a beneficiary in the database
  */
 async function createBeneficiary(data, offlineId, userId) {
+
+  // Accept BOTH online & offline formats
+  const faceImageBase64 =
+    data.biometric?.faceImageData ||
+    data.faceImage ||
+    null;
+
   console.log('Creating beneficiary with data:', JSON.stringify(data, null, 2));
-  
-  // Build beneficiary object
+
+  // Base Data
   const beneficiaryData = {
     name: data.name,
     age: data.age ? parseInt(data.age) : undefined,
@@ -147,7 +156,33 @@ async function createBeneficiary(data, offlineId, userId) {
     registrationDate: new Date()
   };
 
-  // Handle address - could be nested object or flat fields
+  // Needs Mapping
+  if (Array.isArray(data.needs)) {
+    const allowed = [
+      "food", "water", "shelter", "medicine",
+      "clothing", "hygiene", "other"
+    ];
+
+    beneficiaryData.needs = data.needs.map(n => {
+      const clean = n.toLowerCase().trim();
+
+      if (allowed.includes(clean)) {
+        return { type: clean, priority: "medium" };
+      }
+
+      if (clean.includes("sanitation")) {
+        return { type: "hygiene", priority: "medium" };
+      }
+
+      if (clean.includes("baby")) {
+        return { type: "other", description: n, priority: "medium" };
+      }
+
+      return { type: "other", description: n, priority: "medium" };
+    });
+  }
+
+  // Address
   if (data.address) {
     beneficiaryData.address = data.address;
   } else if (data.village || data.district || data.region) {
@@ -158,29 +193,41 @@ async function createBeneficiary(data, offlineId, userId) {
     };
   }
 
-  // Handle needs array
-  if (data.needs && Array.isArray(data.needs)) {
-    beneficiaryData.needs = data.needs;
-  }
-
-  // Handle location
+  // GPS
   if (data.latitude && data.longitude) {
     beneficiaryData.location = {
-      type: 'Point',
+      type: "Point",
       coordinates: [parseFloat(data.longitude), parseFloat(data.latitude)]
     };
   }
 
-  // Create and save
+  // Save Beneficiary First
   const beneficiary = new Beneficiary(beneficiaryData);
   await beneficiary.save();
 
-  console.log('Beneficiary created:', beneficiary._id, beneficiary.name);
+  console.log("Beneficiary created:", beneficiary._id, beneficiary.name);
 
-  // Add to ledger
+  // -----------------------------------
+  // BIOMETRIC SAVE — FIXED
+  // -----------------------------------
+  if (faceImageBase64) {
+    const filePath = saveFaceImage(faceImageBase64, beneficiary._id);
+
+    if (filePath) {
+      beneficiary.biometric = {
+        faceImagePath: filePath,
+        capturedAt: new Date(),
+        capturedBy: userId
+      };
+
+      await beneficiary.save();
+    }
+  }
+
+  // Ledger Block
   try {
     await Ledger.addBlock(
-      'beneficiary_registration',
+      "beneficiary_registration",
       {
         beneficiaryId: beneficiary._id,
         name: beneficiary.name,
@@ -192,11 +239,14 @@ async function createBeneficiary(data, offlineId, userId) {
       `Synced beneficiary: ${beneficiary.name}`
     );
   } catch (ledgerError) {
-    console.log('Ledger entry failed (non-critical):', ledgerError.message);
+    console.log("Ledger error (non-critical):", ledgerError.message);
   }
 
   return beneficiary;
 }
+
+
+
 
 /**
  * Create an aid log in the database

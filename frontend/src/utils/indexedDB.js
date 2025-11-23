@@ -421,6 +421,27 @@ export const getAllPendingRecords = async () => {
   // returns all pending (unsynced) records across types
   return await getOfflineQueue(true);
 };
+export async function clearOfflineQueue() {
+  try {
+    const db = await openDatabase(); // uses ResilienceHubDB
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([STORE_NAME], 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.clear();
+
+      req.onsuccess = () => {
+        console.log('[IndexedDB] offlineQueue cleared');
+        resolve(true);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.error('[IndexedDB] clearOfflineQueue failed', err);
+    throw err;
+  }
+}
+
+
 
 export const getSyncQueueStatus = async () => {
   // returns counts similar to your previous main file

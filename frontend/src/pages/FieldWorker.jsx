@@ -142,20 +142,32 @@ const FieldWorker = () => {
   
   // Camera functions
   const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user' } 
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      setShowCamera(true);
-    } catch (err) {
-      console.error('Camera error:', err);
-      setError('Unable to access camera');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { facingMode: "user" }
+    });
+
+    streamRef.current = stream;
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+
+      // IMPORTANT: Wait until metadata loads, then play
+      videoRef.current.onloadedmetadata = () => {
+        videoRef.current.play().catch(err => {
+          console.error("Play() failed:", err);
+          setError("Camera loaded but cannot display preview");
+        });
+      };
     }
-  };
+
+    setShowCamera(true);
+  } catch (err) {
+    console.error("Camera error:", err);
+    setError("Unable to access camera");
+  }
+};
+
   
   const capturePhoto = () => {
     if (!videoRef.current) return;
